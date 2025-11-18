@@ -415,8 +415,7 @@ function App() {
             <p>
               <strong>Device:</strong>{' '}
               {status.device === 'mps' ? '⚡ GPU (Metal)' :
-               status.device === 'cuda' ? '⚡ GPU (CUDA)' :
-               status.device.includes('cuda') ? '⚡ GPU (CUDA)' :
+               status.device === 'cuda' || (status.device && status.device.includes('cuda')) ? '⚡ GPU (CUDA)' :
                '🖥️ CPU'}
             </p>
             <p><strong>Current Epoch:</strong> {status.current_epoch} / {config.epochs}</p>
