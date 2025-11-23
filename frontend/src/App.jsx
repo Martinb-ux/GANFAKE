@@ -14,7 +14,7 @@ function App() {
     epochs: 10,
     batch_size: 64,
     learning_rate: 0.0002,
-    device: 'mps'
+    device: 'cpu'  // Default to CPU for cloud deployment
   });
   const [metrics, setMetrics] = useState({
     g_losses: [],
