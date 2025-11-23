@@ -25,20 +25,11 @@ app = FastAPI(title="DCGAN Demo API")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # CORS middleware for React frontend
-# Allow both local development and production URLs
-allowed_origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    FRONTEND_URL,
-]
-# Also allow any Vercel preview URLs
-if "vercel.app" in FRONTEND_URL:
-    allowed_origins.append("https://*.vercel.app")
-
+# In production, allow all origins for simplicity (or specify your Vercel URL)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins for demo purposes
+    allow_credentials=False,  # Must be False when using allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )
