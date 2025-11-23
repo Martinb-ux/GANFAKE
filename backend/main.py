@@ -36,15 +36,25 @@ app.add_middleware(
 
 # Global trainer instance
 # Support Apple Silicon (MPS), CUDA, and CPU
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-    logger.info("Using Apple Silicon GPU (MPS)")
-elif torch.cuda.is_available():
-    device = torch.device("cuda")
-    logger.info("Using NVIDIA GPU (CUDA)")
-else:
-    device = torch.device("cpu")
-    logger.info("Using CPU")
+# Check if MPS is both available AND built into this PyTorch version
+def get_default_device():
+    """Detect the best available device"""
+    try:
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            # Test if MPS actually works
+            test_tensor = torch.zeros(1, device="mps")
+            del test_tensor
+            return torch.device("mps")
+    except Exception:
+        pass
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    return torch.device("cpu")
+
+device = get_default_device()
+logger.info(f"Using device: {device}")
 
 trainer = DCGANTrainer(device=device)
 training_task = None
@@ -56,7 +66,7 @@ class TrainingConfig(BaseModel):
     epochs: int = 10
     batch_size: int = 64
     learning_rate: float = 0.0002
-    device: str = "mps"  # mps, cuda, or cpu
+    device: str = "cpu"  # Default to cpu for cloud deployment
 
 
 class GenerateRequest(BaseModel):
