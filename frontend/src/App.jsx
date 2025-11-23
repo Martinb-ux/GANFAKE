@@ -57,10 +57,17 @@ function App() {
   }, []);
 
   const connectWebSocket = () => {
+    // Prevent multiple connection attempts
+    if (wsRef.current && wsRef.current.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+
     const ws = new WebSocket(WS_URL);
+    let hasConnected = false;
 
     ws.onopen = () => {
       console.log('WebSocket connected');
+      hasConnected = true;
       setConnected(true);
       addLog('Connected to training server');
     };
@@ -73,15 +80,20 @@ function App() {
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
       setConnected(false);
-      addLog('WebSocket error - reconnecting...', 'error');
-      setTimeout(connectWebSocket, 3000);
     };
 
     ws.onclose = () => {
       console.log('WebSocket closed');
       setConnected(false);
-      addLog('Disconnected from server', 'warning');
-      setTimeout(connectWebSocket, 3000);
+      wsRef.current = null;
+
+      // Only log and reconnect if we had previously connected successfully
+      if (hasConnected) {
+        addLog('Disconnected from server - reconnecting...', 'warning');
+      }
+
+      // Reconnect after 5 seconds (longer delay to prevent spam)
+      setTimeout(connectWebSocket, 5000);
     };
 
     wsRef.current = ws;
