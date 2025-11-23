@@ -59,6 +59,8 @@ class DCGANTrainer:
         # Training state
         self.is_training = False
         self.current_epoch = 0
+        self.training_start_time = None
+        self.total_training_time = 0  # Accumulated training time in seconds
         self.metrics = {
             'g_losses': [],
             'd_losses': [],
@@ -241,23 +243,43 @@ class DCGANTrainer:
             'fake_scores': self.metrics['fake_scores']
         }
 
-    def save_checkpoint(self, path='checkpoint.pth'):
-        """Save model checkpoint"""
-        torch.save({
+    def save_checkpoint(self, path='checkpoint.pth', metadata=None):
+        """
+        Save model checkpoint with optional metadata
+
+        Args:
+            path: Path to save the checkpoint
+            metadata: Optional dictionary with additional metadata (e.g., model_name, saved_at)
+        """
+        checkpoint_data = {
             'epoch': self.current_epoch,
             'netG_state_dict': self.netG.state_dict(),
             'netD_state_dict': self.netD.state_dict(),
             'optimizerG_state_dict': self.optimizerG.state_dict(),
             'optimizerD_state_dict': self.optimizerD.state_dict(),
-            'metrics': self.metrics
-        }, path)
+            'metrics': self.metrics,
+            'total_training_time': self.total_training_time
+        }
+        if metadata:
+            checkpoint_data['metadata'] = metadata
+        torch.save(checkpoint_data, path)
 
     def load_checkpoint(self, path='checkpoint.pth'):
-        """Load model checkpoint"""
-        checkpoint = torch.load(path)
+        """
+        Load model checkpoint
+
+        Args:
+            path: Path to load the checkpoint from
+
+        Returns:
+            metadata: Dictionary with checkpoint metadata (if available)
+        """
+        checkpoint = torch.load(path, map_location=self.device)
         self.netG.load_state_dict(checkpoint['netG_state_dict'])
         self.netD.load_state_dict(checkpoint['netD_state_dict'])
         self.optimizerG.load_state_dict(checkpoint['optimizerG_state_dict'])
         self.optimizerD.load_state_dict(checkpoint['optimizerD_state_dict'])
         self.current_epoch = checkpoint['epoch']
         self.metrics = checkpoint['metrics']
+        self.total_training_time = checkpoint.get('total_training_time', 0)
+        return checkpoint.get('metadata', {})

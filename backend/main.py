@@ -9,6 +9,8 @@ from pydantic import BaseModel
 import torch
 import asyncio
 import json
+import os
+import time
 from trainer import DCGANTrainer
 from typing import Optional
 import logging
@@ -19,10 +21,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DCGAN Demo API")
 
+# Get frontend URL from environment variable (for production)
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
 # CORS middleware for React frontend
+# Allow both local development and production URLs
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    FRONTEND_URL,
+]
+# Also allow any Vercel preview URLs
+if "vercel.app" in FRONTEND_URL:
+    allowed_origins.append("https://*.vercel.app")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,6 +70,14 @@ class TrainingConfig(BaseModel):
 
 class GenerateRequest(BaseModel):
     num_images: int = 16
+
+
+class SaveModelRequest(BaseModel):
+    model_name: str = "default"  # e.g., "mnist" or "fashion_mnist"
+
+
+class LoadModelRequest(BaseModel):
+    model_name: str = "default"  # e.g., "mnist" or "fashion_mnist"
 
 
 @app.get("/")
@@ -184,9 +207,12 @@ async def stop_training():
 
 
 @app.post("/save_model")
-async def save_model():
+async def save_model(request: SaveModelRequest = SaveModelRequest()):
     """
-    Save the current model checkpoint
+    Save the current model checkpoint with a specific name
+
+    Args:
+        request: SaveModelRequest with model_name (e.g., "mnist", "fashion_mnist")
 
     Returns:
         Save confirmation with file path
@@ -195,14 +221,23 @@ async def save_model():
         return {"success": False, "message": "Cannot save model during training"}
 
     try:
-        checkpoint_path = "dcgan_checkpoint.pth"
-        trainer.save_checkpoint(checkpoint_path)
+        # Create checkpoints directory if it doesn't exist
+        os.makedirs("checkpoints", exist_ok=True)
+
+        checkpoint_path = f"checkpoints/{request.model_name}_checkpoint.pth"
+
+        # Save additional metadata including dataset name and training time
+        trainer.save_checkpoint(checkpoint_path, metadata={
+            "model_name": request.model_name,
+            "saved_at": time.time()
+        })
         logger.info(f"Model saved to {checkpoint_path}")
 
         return {
             "success": True,
-            "message": "Model saved successfully",
-            "path": checkpoint_path
+            "message": f"Model '{request.model_name}' saved successfully",
+            "path": checkpoint_path,
+            "model_name": request.model_name
         }
     except Exception as e:
         logger.error(f"Error saving model: {e}")
@@ -210,30 +245,128 @@ async def save_model():
 
 
 @app.post("/load_model")
-async def load_model():
+async def load_model(request: LoadModelRequest = LoadModelRequest()):
     """
-    Load a model checkpoint
+    Load a model checkpoint by name
+
+    Args:
+        request: LoadModelRequest with model_name (e.g., "mnist", "fashion_mnist")
 
     Returns:
-        Load confirmation with file path
+        Load confirmation with file path and metrics
     """
     if trainer.is_training:
         return {"success": False, "message": "Cannot load model during training"}
 
     try:
-        checkpoint_path = "dcgan_checkpoint.pth"
-        trainer.load_checkpoint(checkpoint_path)
+        checkpoint_path = f"checkpoints/{request.model_name}_checkpoint.pth"
+        metadata = trainer.load_checkpoint(checkpoint_path)
         logger.info(f"Model loaded from {checkpoint_path}")
 
         return {
             "success": True,
-            "message": "Model loaded successfully",
-            "path": checkpoint_path
+            "message": f"Model '{request.model_name}' loaded successfully",
+            "path": checkpoint_path,
+            "model_name": request.model_name,
+            "metrics": trainer.get_metrics(),
+            "metadata": metadata
         }
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="No saved model found")
+        raise HTTPException(status_code=404, detail=f"No saved model found for '{request.model_name}'")
     except Exception as e:
         logger.error(f"Error loading model: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/models")
+async def list_models():
+    """
+    List all available saved model checkpoints
+
+    Returns:
+        List of available models with their metadata
+    """
+    models = []
+    checkpoints_dir = "checkpoints"
+
+    if os.path.exists(checkpoints_dir):
+        for filename in os.listdir(checkpoints_dir):
+            if filename.endswith("_checkpoint.pth"):
+                model_name = filename.replace("_checkpoint.pth", "")
+                filepath = os.path.join(checkpoints_dir, filename)
+
+                # Try to load metadata from checkpoint
+                try:
+                    checkpoint = torch.load(filepath, map_location='cpu')
+                    metadata = checkpoint.get('metadata', {})
+                    metrics = checkpoint.get('metrics', {})
+                    epoch = checkpoint.get('epoch', 0)
+
+                    models.append({
+                        "model_name": model_name,
+                        "filename": filename,
+                        "epoch": epoch,
+                        "saved_at": metadata.get('saved_at'),
+                        "final_g_loss": metrics.get('g_losses', [None])[-1] if metrics.get('g_losses') else None,
+                        "final_d_loss": metrics.get('d_losses', [None])[-1] if metrics.get('d_losses') else None,
+                        "final_real_score": metrics.get('real_scores', [None])[-1] if metrics.get('real_scores') else None,
+                        "final_fake_score": metrics.get('fake_scores', [None])[-1] if metrics.get('fake_scores') else None,
+                        "total_epochs": len(metrics.get('g_losses', [])) if metrics.get('g_losses') else 0,
+                        "total_training_time": checkpoint.get('total_training_time', 0)
+                    })
+                except Exception as e:
+                    logger.warning(f"Could not load metadata for {filename}: {e}")
+                    models.append({
+                        "model_name": model_name,
+                        "filename": filename,
+                        "epoch": None,
+                        "error": str(e)
+                    })
+
+    return {
+        "success": True,
+        "models": models,
+        "count": len(models)
+    }
+
+
+@app.post("/generate_from_model")
+async def generate_from_model(model_name: str, num_images: int = 16):
+    """
+    Generate images from a specific saved model without loading it into the active trainer
+
+    Args:
+        model_name: Name of the model to generate from
+        num_images: Number of images to generate
+
+    Returns:
+        Base64 encoded image grid
+    """
+    try:
+        checkpoint_path = f"checkpoints/{model_name}_checkpoint.pth"
+
+        if not os.path.exists(checkpoint_path):
+            raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found")
+
+        # Create a temporary trainer to load the model
+        temp_trainer = DCGANTrainer(device=device)
+        temp_trainer.load_checkpoint(checkpoint_path)
+
+        # Generate images
+        num_images = min(num_images, 64)
+        fake_images = temp_trainer.generate_images(num_images=num_images)
+        image_b64 = temp_trainer.images_to_base64(fake_images, nrow=int(num_images**0.5))
+
+        return {
+            "success": True,
+            "image": image_b64,
+            "num_images": num_images,
+            "model_name": model_name
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating from model {model_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -247,6 +380,7 @@ async def run_training(trainer: DCGANTrainer, dataloader, num_epochs):
         num_epochs: Number of epochs to train
     """
     trainer.is_training = True
+    trainer.training_start_time = time.time()
     logger.info(f"Starting training for {num_epochs} epochs on {trainer.device}")
 
     try:
@@ -348,10 +482,17 @@ async def run_training(trainer: DCGANTrainer, dataloader, num_epochs):
             'message': f"Training error: {str(e)}"
         })
     finally:
+        # Calculate and store total training time
+        if trainer.training_start_time:
+            session_time = time.time() - trainer.training_start_time
+            trainer.total_training_time += session_time
+            logger.info(f"Training session time: {session_time:.2f}s, Total: {trainer.total_training_time:.2f}s")
+
         trainer.is_training = False
         await broadcast_update({
             'type': 'training_complete',
-            'message': 'Training completed or stopped'
+            'message': 'Training completed or stopped',
+            'total_training_time': trainer.total_training_time
         })
 
 
